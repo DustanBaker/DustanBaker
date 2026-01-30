@@ -1,6 +1,5 @@
 - 👋 Hi, I’m @DustanBaker
 - 👀 I’m interested in Learning practical software and applications.
-- 🌱 I’m currently learning Computer Science/Software Engineering at SNHU.
 - 💞️ I’m looking to collaborate on small projects.
 - 📫 How to reach me dusty@dustybaker.us
 
