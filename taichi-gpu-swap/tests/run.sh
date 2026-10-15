@@ -26,6 +26,19 @@ KERNEL_CMDLINE[default]="quiet splash rootflags=subvol=@ rd.luks.name=abcd=root 
 ENABLE_LIMINE_FALLBACK=yes
 F
       ;;
+    limine-plus)   # Omarchy 2026: cmdline split over several += lines, nvidia tokens on the second one
+      cat > "$ROOT/etc/default/limine" <<'F'
+TARGET_OS_NAME="Omarchy"
+
+ESP_PATH="/boot"
+
+KERNEL_CMDLINE[default]+="cryptdevice=PARTUUID=abcd:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs"
+KERNEL_CMDLINE[default]+=" quiet splash nvidia_drm.modeset=1 nvidia-drm.fbdev=1 loglevel=0 systemd.show_status=false"
+
+ENABLE_UKI=yes
+KERNEL_CMDLINE[default]+=" resume=/dev/mapper/root resume_offset=3790156"
+F
+      ;;
     uki)
       printf 'quiet splash nvidia_drm.modeset=1 root=/dev/nvme0n1p2 rw\n' > "$ROOT/etc/kernel/cmdline" 2>/dev/null || { mkdir -p "$ROOT/etc/kernel"; printf 'quiet splash nvidia_drm.modeset=1 root=/dev/nvme0n1p2 rw\n' > "$ROOT/etc/kernel/cmdline"; }
       ;;
@@ -53,6 +66,13 @@ env = __GLX_VENDOR_LIBRARY_NAME,nvidia
 env = NVD_BACKEND,direct
 # env = GBM_BACKEND,nvidia-drm   (already commented by the user)
 F
+  if [ "$1" = limine-plus ]; then   # envs.conf already stripped of NVIDIA lines by hand: amd must still add the AQ block
+    cat > "$ROOT/home/dusty/.config/hypr/envs.conf" <<'F'
+
+# AMD Radeon AI PRO R9700 (RDNA 4, amdgpu + Mesa/RADV).
+# Nothing to force here. The old NVIDIA block is kept in envs.conf.nvidia-bak.
+F
+  fi
   cat > "$ROOT/home/dusty/.config/hypr/hyprland.conf" <<'F'
 source = ~/.local/share/omarchy/default/hypr/*.conf
 cursor {
@@ -65,7 +85,7 @@ F
 snap() { (cd "$ROOT" && find . -type f ! -path './root/*' ! -name gpu-profile.state | sort | while read -r f; do printf '== %s\n' "$f"; cat "$f"; done); }
 
 fail=0
-for variant in limine uki sdboot; do
+for variant in limine limine-plus uki sdboot; do
   mk_fixture "$variant"
   ORIG="$(snap)"
   "$GP" amd    --root "$ROOT" >"$T/amd1.log" 2>&1 || { echo "amd failed ($variant)"; cat "$T/amd1.log"; exit 1; }

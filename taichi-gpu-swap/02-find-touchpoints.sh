@@ -60,7 +60,7 @@ mk_file=/etc/mkinitcpio.conf
 for f in /etc/mkinitcpio.conf.d/*.conf; do [ -f "$f" ] && grep -Eq '^\s*MODULES=' "$f" && mk_file="$f"; done
 modules="$(grep -E '^\s*MODULES=' "$mk_file" | tail -n1 | sed -E 's/^\s*MODULES=\((.*)\).*$/\1/; s/"//g' | xargs)"
 cmd_kind=""; cmd_file=""; cmd_src=""
-if [ -f /etc/default/limine ] && grep -Eq '^\s*KERNEL_CMDLINE\[' /etc/default/limine; then cmd_kind=limine-default; cmd_file=/etc/default/limine; cmd_src="$(grep -E '^\s*KERNEL_CMDLINE\[' /etc/default/limine | head -n1 | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//')"
+if [ -f /etc/default/limine ] && grep -Eq '^\s*KERNEL_CMDLINE\[' /etc/default/limine; then cmd_kind=limine-default; cmd_file=/etc/default/limine; cmd_src="$(grep -E '^\s*KERNEL_CMDLINE\[' /etc/default/limine | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//' | tr '\n' ' ')"
 elif [ -f /etc/kernel/cmdline ]; then cmd_kind=kernel-cmdline; cmd_file=/etc/kernel/cmdline; cmd_src="$(cat /etc/kernel/cmdline)"
 elif sudo ls /boot/loader/entries/*.conf >/dev/null 2>&1; then cmd_kind=sd-boot; cmd_file=/boot/loader/entries; cmd_src="$(sudo grep -hE '^\s*options' /boot/loader/entries/*.conf | head -n1 | sed -E 's/^\s*options\s+//')"
 elif [ -f /etc/default/grub ]; then cmd_kind=grub; cmd_file=/etc/default/grub; cmd_src="$(grep -E '^\s*GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub | sed -E 's/^[^=]*=//; s/"//g')"

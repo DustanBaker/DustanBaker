@@ -226,15 +226,16 @@ detect_cmdline() {
   fi
   [ -n "$CMDLINE_KIND" ] || { warn "could not find where the kernel cmdline is configured; set CMDLINE_KIND/CMDLINE_FILE in $CONF"; CMDLINE_KIND=none; }
 }
-transform_cmdline() {  # transform_cmdline "<cmdline string>" -> new string
-  local s="$1"
+CMDLINE_NO_INSERT=0   # set while rewriting a line that must not receive the nvidia tokens (multi-line cmdlines)
+transform_cmdline() {  # transform_cmdline "<cmdline string>" -> new string (always whitespace-normalised)
+  local toks=($1) s="${toks[*]:-}"
   if [ "$PROFILE" = amd ]; then
     s="$(tokens_remove_matching "$s" '^nvidia[._-]')"
     s="$(tokens_remove_listed "$s" "${NVIDIA_CMDLINE_PARAMS[@]}")"
     [ ${#AMD_CMDLINE_PARAMS[@]} -gt 0 ] && s="$(tokens_add_missing "$s" "${AMD_CMDLINE_PARAMS[@]}")"
   else
     [ ${#AMD_CMDLINE_PARAMS[@]} -gt 0 ] && s="$(tokens_remove_listed "$s" "${AMD_CMDLINE_PARAMS[@]}")"
-    s="$(tokens_insert_after "$s" "$NVIDIA_CMDLINE_ANCHOR" "${NVIDIA_CMDLINE_PARAMS[@]}")"
+    [ $CMDLINE_NO_INSERT = 1 ] || s="$(tokens_insert_after "$s" "$NVIDIA_CMDLINE_ANCHOR" "${NVIDIA_CMDLINE_PARAMS[@]}")"
   fi
   printf '%s' "$s"
 }
@@ -249,20 +250,33 @@ rewrite_cmdline_file() {
     body="$(tr '\n' ' ' < "$f" | xargs)"; out="$(transform_cmdline "$body")"
     printf '%s\n' "$out" > "$new"
   else
+    # Omarchy splits the cmdline over several KERNEL_CMDLINE[default]+="..." lines. Tokens are removed from
+    # every line, but inserted into exactly one: the line holding the anchor token, else the last matching line.
+    local n=0 target=0 i=0 q
+    while IFS= read -r line || [ -n "$line" ]; do
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue; [[ "$line" =~ $prefix_re ]] || continue
+      n=$((n+1)); body="${line#"${BASH_REMATCH[0]}"}"; q=""; [[ "$body" =~ ^[\"\'] ]] && q="${body:0:1}"; body="${body#"$q"}"; body="${body%"$q"}"
+      if [ -n "$NVIDIA_CMDLINE_ANCHOR" ] && [[ " $body " == *" $NVIDIA_CMDLINE_ANCHOR "* ]]; then target=$n; fi
+    done < "$f"
+    [ $target = 0 ] && target=$n
     while IFS= read -r line || [ -n "$line" ]; do
       if [[ "$line" =~ ^[[:space:]]*# ]] || ! [[ "$line" =~ $prefix_re ]]; then printf '%s\n' "$line" >> "$new"; continue; fi
+      i=$((i+1)); CMDLINE_NO_INSERT=0; [ $i = $target ] || CMDLINE_NO_INSERT=1
       pre="${BASH_REMATCH[0]}"; body="${line#"$pre"}"
       if [ "$mode" = quoted ]; then
-        local q="" ; [[ "$body" =~ ^[\"\'] ]] && q="${body:0:1}"
+        local q="" lead="" trail=""; [[ "$body" =~ ^[\"\'] ]] && q="${body:0:1}"
         body="${body#"$q"}"; body="${body%"$q"}"; post="$q"
         [ -z "$q" ] && post=""
+        # keep the whitespace inside the quotes as it was (Omarchy's += lines start with a space)
+        if ! [[ "$body" =~ ^[[:space:]]*$ ]]; then lead="${body%%[![:space:]]*}"; trail="${body##*[![:space:]]}"; fi
         out="$(transform_cmdline "$body")"
-        printf '%s%s%s%s\n' "$pre" "$q" "$out" "$post" >> "$new"
+        printf '%s%s%s%s%s%s\n' "$pre" "$q" "$lead" "$out" "$trail" "$post" >> "$new"
       else
         out="$(transform_cmdline "$(printf '%s' "$body" | xargs)")"
         printf '%s%s\n' "$pre" "$out" >> "$new"
       fi
     done < "$f"
+    CMDLINE_NO_INSERT=0
   fi
   stage_file "$f" "$new"
 }
@@ -272,7 +286,7 @@ do_cmdline() {
     # Auto: whatever nvidia* tokens exist today (config file first, then the running kernel)
     local src=""
     case "$CMDLINE_KIND" in
-      limine-default) src="$(grep -E '^[[:space:]]*KERNEL_CMDLINE\[' "$R$CMDLINE_FILE" | head -n1 | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//')" ;;
+      limine-default) src="$(grep -E '^[[:space:]]*KERNEL_CMDLINE\[' "$R$CMDLINE_FILE" | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//' | tr '\n' ' ')" ;;
       kernel-cmdline) src="$(cat "$R$CMDLINE_FILE")" ;;
       grub)           src="$(grep -E '^[[:space:]]*GRUB_CMDLINE_LINUX(_DEFAULT)?=' "$R$CMDLINE_FILE" | sed -E 's/^[^=]*=//; s/^"//; s/"$//' | tr '\n' ' ')" ;;
       sd-boot)        src="$(grep -hE '^[[:space:]]*options[[:space:]]' "$R"/boot/loader/entries/*.conf | sed -E 's/^[[:space:]]*options[[:space:]]+//' | tr '\n' ' ')" ;;
@@ -290,7 +304,7 @@ do_cmdline() {
   log "kernel cmdline via $CMDLINE_KIND ($CMDLINE_FILE): nvidia tokens = ${NVIDIA_CMDLINE_PARAMS[*]}; amd tokens = ${AMD_CMDLINE_PARAMS[*]:-(none)}"
   local before=${#CHANGED[@]}
   case "$CMDLINE_KIND" in
-    limine-default) rewrite_cmdline_file "$R$CMDLINE_FILE" '^[[:space:]]*KERNEL_CMDLINE\[[^]]*\]=' quoted
+    limine-default) rewrite_cmdline_file "$R$CMDLINE_FILE" '^[[:space:]]*KERNEL_CMDLINE\[[^]]*\]\+?=' quoted
                     [ ${#CHANGED[@]} -gt $before ] && CMDS+=("limine-update") || true ;;
     kernel-cmdline) rewrite_cmdline_file "$R$CMDLINE_FILE" '' whole
                     [ ${#CHANGED[@]} -gt $before ] && CMDS+=("mkinitcpio -P") || true ;;
@@ -385,6 +399,7 @@ do_toggle_files() {
     mkdir -p "$(dirname "$R$HYPR_ENV_FILE")"; : > "$R$HYPR_ENV_FILE"
     case " ${TOGGLE_FILES[*]:-} " in *" $HYPR_ENV_FILE "*) ;; *) TOGGLE_FILES+=("$HYPR_ENV_FILE") ;; esac
   fi
+  if [ "$PROFILE" = amd ]; then case " ${TOGGLE_FILES[*]:-} " in *" $HYPR_ENV_FILE "*) ;; *) TOGGLE_FILES+=("$HYPR_ENV_FILE") ;; esac; fi
   log "env / module-load files: ${TOGGLE_FILES[*]:-(none found)}"
   local f; for f in "${TOGGLE_FILES[@]}"; do toggle_file "$R$f"; done
 }

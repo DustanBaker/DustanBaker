@@ -23,9 +23,12 @@ echo; echo "################ gpu-profile nvidia (sandbox)"
 "$HERE/gpu-profile" nvidia --root "$ROOT"
 NV="$(snap)"
 echo
-if [ "$ORIG" = "$NV" ]; then echo "RESULT: nvidia(amd(current)) == current, byte for byte — the profiles are exact inverses"; else echo "RESULT: MISMATCH after round trip:"; diff <(echo "$ORIG") <(echo "$NV") || true; exit 1; fi
+RC=0
+if [ "$ORIG" = "$NV" ]; then echo "RESULT: nvidia(amd(current)) == current, byte for byte — the profiles are exact inverses"
+else echo "RESULT: MISMATCH after round trip (expected when the box no longer carries the NVIDIA config: nvidia then reconstructs Omarchy's defaults):"; diff <(echo "$ORIG") <(echo "$NV") || true; RC=1; fi
 "$HERE/gpu-profile" amd --root "$ROOT" >/dev/null; AMD2="$(snap)"
-[ "$AMD" = "$AMD2" ] && echo "RESULT: amd is idempotent and amd(nvidia(amd(x))) == amd(x)" || { echo "RESULT: amd re-apply differs"; exit 1; }
+[ "$AMD" = "$AMD2" ] && echo "RESULT: amd is idempotent and amd(nvidia(amd(x))) == amd(x)" || { echo "RESULT: amd re-apply differs"; RC=1; }
 echo; echo "################ real --dry-run (reads live files, writes nothing)"
 "$HERE/gpu-profile" amd --dry-run
 echo; "$HERE/gpu-profile" nvidia --dry-run
+exit $RC
