@@ -17,8 +17,9 @@ sec "2.1 Kernel / firmware (RDNA4 Navi 48 = gfx1201)"
 echo "  amdgpu gained Navi 48 (gfx12) support in kernel 6.11; the RX 9070 launch guidance was >= 6.13/6.14 for a clean"
 echo "  experience, and navi48 firmware shipped in linux-firmware 20250211. Arch has split the firmware into"
 echo "  linux-firmware-amdgpu since 2025, so check that package too."
-sudo pacman -Sy --needed --noconfirm linux-firmware 2>&1 | tail -n 3
-pacman -Q linux-firmware-amdgpu >/dev/null 2>&1 || sudo pacman -S --needed --noconfirm linux-firmware-amdgpu 2>/dev/null || true
+# Full sync+upgrade (never -Sy alone: a partial upgrade on Arch can break the kernel/module match).
+sudo pacman -Syu --needed --noconfirm linux-firmware 2>&1 | tail -n 3
+pacman -Si linux-firmware-amdgpu >/dev/null 2>&1 && sudo pacman -S --needed --noconfirm linux-firmware-amdgpu 2>&1 | tail -n 1
 rec 'pacman -Q linux linux-firmware linux-firmware-amdgpu 2>/dev/null; uname -r'
 rec 'ls /usr/lib/firmware/amdgpu/ | grep -E "gc_12_0_1|psp_14_0_3|sdma_7_0_1|dcn_4|vcn_5_0|smu_14_0_3" | head -n 20; ls /usr/lib/firmware/amdgpu/*.zst 2>/dev/null | grep -cE "gc_12_0_1|navi48"'
 kv="$(uname -r | cut -d. -f1-2)"; if [ "$(printf '%s\n6.13\n' "$kv" | sort -V | head -n1)" = "6.13" ]; then echo "  kernel $kv >= 6.13: OK" | tee -a "$OUT"; else echo "  WARNING: running kernel $kv < 6.13 — update before the swap" | tee -a "$OUT"; fi

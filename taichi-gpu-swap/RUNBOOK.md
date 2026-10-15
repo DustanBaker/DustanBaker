@@ -3,6 +3,26 @@
 Box: ASRock B650E Taichi Lite, Ryzen 7 7800X3D (Raphael iGPU), Omarchy (Arch + Hyprland, Limine + Snapper).
 Everything below lives in `~/gpu-swap/` (installed from the `taichi-gpu-swap/` folder of this repo with `./install.sh`).
 
+## 0a. Cards already installed? (you swapped before running anything)
+
+Nothing is lost: every script detects the live state. With the NVIDIA profile still applied the box usually boots
+anyway (the nvidia modules just fail to load and amdgpu autoloads), but Hyprland may be running with
+`LIBVA_DRIVER_NAME=nvidia` / `__GLX_VENDOR_LIBRARY_NAME=nvidia` exported and the NVIDIA cursor workaround on, and
+the initramfs still carries nvidia instead of amdgpu. Order for this case, one reboot total:
+
+```
+git clone <this repo> && ./DustanBaker/taichi-gpu-swap/install.sh
+~/gpu-swap/00-snapshot.sh && ~/gpu-swap/01-inventory.sh && ~/gpu-swap/02-find-touchpoints.sh
+lspci -k -d ::0300; ls -l /dev/dri/by-path/; journalctl -b -k | grep -iE "amdgpu|firmware" | tail -n 20   # sanity: both cards on amdgpu?
+~/gpu-swap/04-download-models.sh &        # 93 GB; let it run in the background
+~/gpu-swap/03-install-amd-stack.sh        # firmware, Mesa/RADV, ROCm, amdgpu_top, both llama.cpp builds
+~/gpu-swap/verify-inverse.sh              # sandbox round trip + both dry-runs
+~/gpu-swap/gpu-profile amd                # removes nvidia from MODULES/cmdline/env, asks before mkinitcpio -P + limine-update
+sudo reboot                               # then section 2's first-boot checks and test-flash-next.sh
+```
+The dGPU PCI address that goes into the `AQ_DRM_DEVICES` block is read from `lspci` live, so with the cards in it
+is the real top-slot R9700, not an inferred one.
+
 ## 0. Before the swap (software only, 5090 still in)
 
 Run in this order, all while the NVIDIA desktop is working:
