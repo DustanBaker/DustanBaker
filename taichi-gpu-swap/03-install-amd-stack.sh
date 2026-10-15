@@ -18,7 +18,16 @@ echo "  amdgpu gained Navi 48 (gfx12) support in kernel 6.11; the RX 9070 launch
 echo "  experience, and navi48 firmware shipped in linux-firmware 20250211. Arch has split the firmware into"
 echo "  linux-firmware-amdgpu since 2025, so check that package too."
 # Full sync+upgrade (never -Sy alone: a partial upgrade on Arch can break the kernel/module match).
-sudo pacman -Syu --needed --noconfirm linux-firmware 2>&1 | tail -n 3
+# Omarchy's pacman hook refuses a direct `pacman -Syu` (00-omarchy-update-guard.hook); its own updater does the
+# snapshot, keyring, upgrade, migrations and boot-file verification, and with -y never reboots by itself.
+if [ -x /usr/share/omarchy/bin/omarchy-update ] && command -v omarchy >/dev/null 2>&1; then
+  echo "  Omarchy box: running 'omarchy update -y' instead of a direct pacman -Syu (log: $GPU_SWAP_DIR/omarchy-update.log)"
+  omarchy update -y >"$GPU_SWAP_DIR/omarchy-update.log" 2>&1 || echo "  WARNING: omarchy update exited $? — read $GPU_SWAP_DIR/omarchy-update.log" | tee -a "$OUT"
+  tail -n 5 "$GPU_SWAP_DIR/omarchy-update.log"
+else
+  sudo pacman -Syu --needed --noconfirm 2>&1 | tail -n 3
+fi
+sudo pacman -S --needed --noconfirm linux-firmware 2>&1 | tail -n 1
 pacman -Si linux-firmware-amdgpu >/dev/null 2>&1 && sudo pacman -S --needed --noconfirm linux-firmware-amdgpu 2>&1 | tail -n 1
 rec 'pacman -Q linux linux-firmware linux-firmware-amdgpu 2>/dev/null; uname -r'
 rec 'ls /usr/lib/firmware/amdgpu/ | grep -E "gc_12_0_1|psp_14_0_3|sdma_7_0_1|dcn_4|vcn_5_0|smu_14_0_3" | head -n 20; ls /usr/lib/firmware/amdgpu/*.zst 2>/dev/null | grep -cE "gc_12_0_1|navi48"'
