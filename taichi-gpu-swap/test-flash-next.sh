@@ -6,7 +6,11 @@
 #   - llama-server: real ~30K-token prompt through /completion (prompt tok/s, gen tok/s, time to first token)
 #   - dual-card: did the split load without the ggml-backend-meta assertion?
 #   - vision via llama-mtmd-cli + mmproj
-# Flags per the plan: -ngl 99 --jinja -fa on -fit off, mmap on (no --no-mmap).
+# Flags: --jinja -fa on, mmap on. Memory: this quant is ~89 GB of weights; Taichi Station has 64 GB of VRAM and
+# 30 GB of RAM, so "-ngl 99 -fit off" cannot fit and, tried on 2026-10-15, starved the display card's VRAM
+# (Hyprland aborted) and spilled into RAM until the OOM killer fired. Default is therefore FIT=on with -ngl left
+# unset (fit only adjusts unset arguments) and a VRAM margin per device (FIT_TARGET_*; device 0 drives the
+# desktop, keep >= 3 GB there). FIT=off restores the original full-offload attempt.
 # Report: ~/gpu-swap/test-results-<ts>.md, logs in ~/gpu-swap/test-logs-<ts>/
 set -uo pipefail
 GPU_SWAP_DIR="${GPU_SWAP_DIR:-$HOME/gpu-swap}"
@@ -20,6 +24,10 @@ CTX="${CTX:-40960}"            # room for the ~30K prompt + answer
 PROMPT_TOKENS="${PROMPT_TOKENS:-30000}"
 PORT="${PORT:-8099}"           # test port; production llama-server keeps its own
 BACKENDS="${BACKENDS:-vulkan rocm}"
+FIT="${FIT:-on}"                                  # on: let llama.cpp pick -ngl/ctx to fit; off: -ngl 99 -fit off
+FIT_TARGET_SINGLE="${FIT_TARGET_SINGLE:-3072}"    # MiB of VRAM left free on the (display) card
+FIT_TARGET_DUAL="${FIT_TARGET_DUAL:-3072,2048}"   # per device, comma separated (device 0 = display card)
+BENCH_REPS="${BENCH_REPS:-1}"
 TS="$(date +%Y%m%d-%H%M%S)"
 LOGS="$GPU_SWAP_DIR/test-logs-$TS"; mkdir -p "$LOGS"
 REPORT="$GPU_SWAP_DIR/test-results-$TS.md"
@@ -31,7 +39,11 @@ assert_check() {  # assert_check <logfile> -> "clean" or the offending line
   local l; l="$(grep -m1 -E 'ggml-backend-meta|GGML_ASSERT|unknown model architecture|failed to load model|out of memory|Segmentation|Aborted' "$1" 2>/dev/null || true)"
   [ -z "$l" ] && echo "clean" || echo "FAIL: ${l:0:120}"
 }
-kill_server() { [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""; }
+kill_server() { if [ -n "${SRV_PID:-}" ]; then kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; fi; SRV_PID=""; }
+fit_args() {  # fit_args <single|dual> -> the offload/fit flags for llama-server / llama-mtmd-cli
+  if [ "$FIT" = on ]; then [ "$1" = dual ] && echo "-fit on -fitt $FIT_TARGET_DUAL" || echo "-fit on -fitt $FIT_TARGET_SINGLE"
+  else echo "-ngl 99 -fit off"; fi
+}
 trap kill_server EXIT
 
 # ---- environment report
@@ -40,6 +52,7 @@ say "model: \`$MODEL\`"; say "mmproj: \`$MMPROJ\`"; say "llama.cpp: \`$(cat "$GP
 say ""; say '```'
 { uname -r; lspci -nn -d ::0300; ls -l /dev/dri/by-path/ 2>/dev/null; vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' ; rocminfo 2>/dev/null | grep -E '^\s+Name:\s+gfx' ; } | tee -a "$REPORT"
 say '```'
+say ""; say "RAM: $(free -g | awk '/^Mem:/{print $2" GB total, "$7" GB available"}'); VRAM: $(for d in /sys/class/drm/card[0-9]/device/mem_info_vram_total; do echo -n "$(( $(cat $d) / 1073741824 ))G "; done); weights on disk: $(du -sh "$(dirname "$MODEL")" | cut -f1); fit mode: FIT=$FIT (margins single=$FIT_TARGET_SINGLE dual=$FIT_TARGET_DUAL MiB)"
 say ""; say "Hyprland DRM device in use: \`$(cat /proc/$(pgrep -x Hyprland | head -n1)/environ 2>/dev/null | tr '\0' '\n' | grep AQ_DRM_DEVICES || echo 'AQ_DRM_DEVICES unset (aquamarine auto-pick)')\`"
 
 # ---- a ~30K-token prompt (English prose ≈ 1.3 tokens/word → ~23K words)
@@ -69,22 +82,25 @@ png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 
 open(sys.argv[1], "wb").write(png)
 PY
 
-bench_flags() {  # llama-bench syntax differs slightly between versions; probe --help
-  local b="$1" f="-ngl 99 -fa 1 -mmp 1 -p 512,$PROMPT_TOKENS -n 128 -r 2"
-  "$b" --help 2>&1 | grep -q -- '-fit' && f="$f -fit 0"
+bench_flags() {  # bench_flags <single|dual>; llama-bench (b7xxx+): -fa on|off, -lm mmap, -fitt <MiB,...>, -dev a/b
+  local f="-fa on -lm mmap -sm layer -p 512,$PROMPT_TOKENS -n 128 -r $BENCH_REPS"
+  # llama-bench takes a single -fitt value (broadcast to every device): use the display card's margin
+  if [ "$FIT" = on ]; then f="$f -fitt ${FIT_TARGET_SINGLE%%,*}"; else f="$f -ngl 99"; fi
   echo "$f"
 }
-server_bench() {  # server_bench <bin> <devices-arg> <label> [fit] -> prints "prompt_tps gen_tps ttft_s n_prompt assert"
-  local bin="$1" dev="$2" label="$3" fit="${4:-off}" log="$LOGS/server-$label.log"
+server_bench() {  # server_bench <bin> <devices-arg> <label> <single|dual> [fit-override] -> "prompt_tps gen_tps ttft_s n_prompt assert"
+  local bin="$1" dev="$2" label="$3" cfg="$4" fitov="${5:-}"
+  local log="$LOGS/server-$label.log" fargs
+  fargs="$(fit_args "$cfg")"; [ "$fitov" = on ] && fargs="-fit on -fitt $([ "$cfg" = dual ] && echo "$FIT_TARGET_DUAL" || echo "$FIT_TARGET_SINGLE")"
   kill_server
-  "$bin" -m "$MODEL" --mmproj "$MMPROJ" -ngl 99 --jinja -fa on -fit "$fit" -c "$CTX" --host 127.0.0.1 --port "$PORT" $dev >"$log" 2>&1 &
+  "$bin" -m "$MODEL" --mmproj "$MMPROJ" --jinja -fa on $fargs -c "$CTX" --host 127.0.0.1 --port "$PORT" $dev >"$log" 2>&1 &
   SRV_PID=$!
   for _ in $(seq 1 180); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 2; done
   if ! curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     kill_server
     # 93 GB of Q4_K_M cannot sit in 64 GB of VRAM: if the -fit off run died on allocation, retry once with -fit on
-    if [ "$fit" = off ] && grep -qiE 'out of memory|failed to allocate|ggml_backend_alloc|not enough' "$log"; then
-      server_bench "$bin" "$dev" "$label-fit-on" on | sed 's/$/ (fallback:-fit_on)/'; return
+    if [ "$FIT" = off ] && [ -z "$fitov" ] && grep -qiE 'out of memory|failed to allocate|ggml_backend_alloc|not enough' "$log"; then
+      server_bench "$bin" "$dev" "$label-fit-on" "$cfg" on | sed 's/$/ (fallback:-fit_on)/'; return
     fi
     echo "- - - - $(assert_check "$log")"; return
   fi
@@ -99,6 +115,7 @@ print(f'{t.get("prompt_per_second",0):.1f} {t.get("predicted_per_second",0):.2f}
 PY
   local res=$?
   [ $res = 0 ] || printf -- '- - - request_failed '
+  printf '%s ' "$(grep -oE 'offloaded [0-9]+/[0-9]+ layers' "$log" | tail -n1 | tr ' ' '_' || true)"
   echo "$(assert_check "$log")"
   kill_server
 }
@@ -107,14 +124,16 @@ for be in $BACKENDS; do
   BIN="$LLAMA_DIR/build-$be/bin"; [ -x "$BIN/llama-server" ] || { say ""; say "## $be: build missing at $BIN — skipped"; continue; }
   say ""; say "## backend: $be  (\`$BIN\`)"; say ""
   say '```'; "$BIN/llama-cli" --list-devices 2>&1 | tee -a "$REPORT"; say '```'
-  if [ "$be" = vulkan ]; then D1="--device Vulkan0"; D2="--device Vulkan0,Vulkan1"; else D1="--device ROCm0"; D2="--device ROCm0,ROCm1"; fi
+  # device 0 is the card driving the desktop (top slot). llama-server/mtmd take a comma list, llama-bench a slash list.
+  if [ "$be" = vulkan ]; then D1="--device Vulkan0"; D2="--device Vulkan0,Vulkan1"; B1="-dev Vulkan0"; B2="-dev Vulkan0/Vulkan1"
+  else D1="--device ROCm0"; D2="--device ROCm0,ROCm1"; B1="-dev ROCm0"; B2="-dev ROCm0/ROCm1"; fi
   # ---- llama-bench
   say ""; say "### llama-bench"; say ""; say '```'
-  for cfg in "single:$D1" "dual:$D2"; do
+  for cfg in "single:$B1" "dual:$B2"; do
     name="${cfg%%:*}"; dev="${cfg#*:}"
-    echo "--- $name ($dev)" | tee -a "$REPORT"
+    echo "--- $name ($dev; $(bench_flags "$name"))" | tee -a "$REPORT"
     # shellcheck disable=SC2046
-    "$BIN/llama-bench" -m "$MODEL" $(bench_flags "$BIN/llama-bench") -sm layer $(printf '%s' "$dev" | sed 's/--device/--device/') 2>"$LOGS/bench-$be-$name.err" | tee -a "$REPORT" | tail -n 6
+    "$BIN/llama-bench" -m "$MODEL" $(bench_flags "$name") $dev 2>"$LOGS/bench-$be-$name.err" | tee -a "$REPORT" | tail -n 6
     echo "load/assert check: $(assert_check "$LOGS/bench-$be-$name.err")" | tee -a "$REPORT"
   done
   say '```'
@@ -122,11 +141,11 @@ for be in $BACKENDS; do
   say ""; say "### llama-server, ~${PROMPT_TOKENS}-token prompt, 64 generated tokens"; say ""
   row "config" "prompt tok/s" "gen tok/s" "TTFT (s)" "notes" "assert check"
   row "---" "---" "---" "---" "---" "---"
-  r1="$(server_bench "$BIN/llama-server" "$D1" "$be-single" | tr '\n' ' ')"; set -- $r1; row "single card ($D1)" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-}" "${*:5}"
-  r2="$(server_bench "$BIN/llama-server" "$D2 -sm layer" "$be-dual" | tr '\n' ' ')"; set -- $r2; row "both cards, layer split" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-}" "${*:5}"
+  r1="$(server_bench "$BIN/llama-server" "$D1" "$be-single" single | tr '\n' ' ')"; set -- $r1; row "single card ($D1)" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-} ${5:-}" "${*:6}"
+  r2="$(server_bench "$BIN/llama-server" "$D2 -sm layer" "$be-dual" dual | tr '\n' ' ')"; set -- $r2; row "both cards, layer split" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-} ${5:-}" "${*:6}"
   # ---- vision
   say ""; say "### vision (llama-mtmd-cli, both cards)"; say ""; say '```'
-  timeout 900 "$BIN/llama-mtmd-cli" -m "$MODEL" --mmproj "$MMPROJ" --image "$IMG" -p "What shapes and colours are in this image? Answer in one sentence." -ngl 99 --jinja -fa on -fit off $D2 -n 64 --temp 0 >"$LOGS/mtmd-$be.log" 2>&1
+  timeout 1800 "$BIN/llama-mtmd-cli" -m "$MODEL" --mmproj "$MMPROJ" --image "$IMG" -p "What shapes and colours are in this image? Answer in one sentence." --jinja -fa on $(fit_args dual) $D2 -n 64 --temp 0 >"$LOGS/mtmd-$be.log" 2>&1
   tail -n 4 "$LOGS/mtmd-$be.log" | tee -a "$REPORT"
   echo "vision check: $(grep -qiE 'blue|circle|disc|red|square' "$LOGS/mtmd-$be.log" && echo 'answer mentions the shapes/colours: OK' || echo 'answer did not describe the image — check log') / $(assert_check "$LOGS/mtmd-$be.log")" | tee -a "$REPORT"
   say '```'
@@ -136,5 +155,5 @@ say ""; say "## Summary"; say ""
 say "- Logs: \`$LOGS\`"
 say "- Dual-card split status: $(grep -l 'ggml-backend-meta' "$LOGS"/*dual* 2>/dev/null | wc -l) log(s) hit the ggml-backend-meta assertion (0 = good)."
 say "- If Vulkan is faster for generation and ROCm for prompt processing (the Phoronix R9700 pattern), pick per workload: agents with long contexts → compare TTFT above."
-say "- Memory: Q4_K_M ~93 GB does not fit in 64 GB VRAM; expect partial offload via -ngl auto or mmap paging unless -fit/-ot is used. Compare with: \`-ngl auto\` and \`--n-cpu-moe N\`."
+say "- Memory: ~89 GB of Q4_K_M weights vs 64 GB VRAM + 30 GB RAM: with FIT=on the layers that do not fit stay mmapped on the CPU side and page from NVMe, which dominates prompt processing on a single card. A smaller quant (3.84bpw IQ4_XS is in the same HF repo) or more RAM is the real fix."
 echo; echo "report: $REPORT"
