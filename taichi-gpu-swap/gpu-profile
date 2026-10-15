@@ -436,9 +436,9 @@ do_status() {
   [ -z "$R" ] && [ -r /proc/cmdline ] && echo "running cmdline : $(cat /proc/cmdline)"
   echo "toggle files    : ${TOGGLE_FILES[*]:-(none)}"
   local n_marked=0 n_active=0
-  for f in "${TOGGLE_FILES[@]:-}"; do [ -f "$R$f" ] || continue
-    n_marked=$((n_marked + $(grep -Fc "$MARKER" "$R$f" || true)))
-    n_active=$((n_active + $(grep -Ec "^[[:space:]]*[^#].*${NVIDIA_LINE_REGEX}" "$R$f" || true)))
+  local t; for t in "${TOGGLE_FILES[@]:-}"; do [ -f "$R$t" ] || continue
+    n_marked=$((n_marked + $(grep -Fc "$MARKER" "$R$t" || true)))
+    n_active=$((n_active + $(grep -Ec "^[[:space:]]*[^#].*${NVIDIA_LINE_REGEX}" "$R$t" || true)))
   done
   echo "nvidia env lines: $n_active active, $n_marked disabled by gpu-profile"
   echo "dGPU / iGPU PCI : ${DGPU_PCI_ADDR:-?} / ${IGPU_PCI_ADDR:-?}"
