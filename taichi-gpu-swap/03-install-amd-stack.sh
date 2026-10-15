@@ -34,7 +34,7 @@ rec 'ls /usr/lib/firmware/amdgpu/ | grep -E "gc_12_0_1|psp_14_0_3|sdma_7_0_1|dcn
 kv="$(uname -r | cut -d. -f1-2)"; if [ "$(printf '%s\n6.13\n' "$kv" | sort -V | head -n1)" = "6.13" ]; then echo "  kernel $kv >= 6.13: OK" | tee -a "$OUT"; else echo "  WARNING: running kernel $kv < 6.13 — update before the swap" | tee -a "$OUT"; fi
 
 sec "2.2 Mesa / RADV / Vulkan + llama.cpp Vulkan build deps"
-PKGS=(mesa vulkan-radeon vulkan-icd-loader vulkan-tools vulkan-headers glslang shaderc libva-mesa-driver mesa-utils libva-utils cmake ninja git curl)
+PKGS=(mesa vulkan-radeon vulkan-icd-loader vulkan-tools vulkan-headers spirv-headers glslang shaderc libva-mesa-driver mesa-utils libva-utils cmake ninja git curl)   # spirv-headers: ggml-vulkan's CMake find_package(SPIRV-Headers)
 if grep -Eq '^\[multilib\]' /etc/pacman.conf; then PKGS+=(lib32-mesa lib32-vulkan-radeon lib32-vulkan-icd-loader); echo "  multilib enabled: adding lib32 variants"; fi
 sudo pacman -S --needed --noconfirm "${PKGS[@]}" 2>&1 | tail -n 5
 rec "pacman -Q ${PKGS[*]}"
@@ -47,7 +47,8 @@ sudo pacman -S --needed --noconfirm rocm-hip-sdk rocm-hip-runtime rocminfo rocm-
 sudo pacman -S --needed --noconfirm rocwmma 2>/dev/null | tail -n 1 || true
 rec 'pacman -Q rocm-hip-sdk rocm-hip-runtime rocm-core rocminfo rocm-smi-lib rocblas hipblas hipblaslt rocwmma rocm-llvm 2>/dev/null; cat /opt/rocm/.info/version 2>/dev/null'
 rec 'echo "rocBLAS tensile libraries for $GPU_TARGET:"; ls /opt/rocm/lib/rocblas/library 2>/dev/null | grep -c gfx1201; ls /opt/rocm/lib/rocblas/library 2>/dev/null | grep gfx1201 | head -n 5'
-if ls /opt/rocm/lib/rocblas/library 2>/dev/null | grep -q gfx1201; then echo "  rocBLAS has gfx1201 kernels: OK" | tee -a "$OUT"; else echo "  WARNING: no gfx1201 rocBLAS libraries — the ROCm build will fall back to generic/slow paths or fail at runtime. Vulkan is the safe backend." | tee -a "$OUT"; fi
+# (not `ls | grep -q`: under pipefail grep closing early fails the pipeline and raised a false warning)
+if [ "$(ls /opt/rocm/lib/rocblas/library 2>/dev/null | grep -c gfx1201)" -gt 0 ]; then echo "  rocBLAS has gfx1201 kernels: OK" | tee -a "$OUT"; else echo "  WARNING: no gfx1201 rocBLAS libraries — the ROCm build will fall back to generic/slow paths or fail at runtime. Vulkan is the safe backend." | tee -a "$OUT"; fi
 rec 'ls /opt/rocm/lib/hipblaslt/library 2>/dev/null | grep -c gfx1201'
 rec 'id -nG | tr " " "\n" | grep -E "^(render|video)$"'
 if ! id -nG | grep -qw render; then echo "  adding $USER to render,video (needed for /dev/kfd and /dev/dri/renderD*; takes effect at next login)"; sudo usermod -aG render,video "$USER"; fi
