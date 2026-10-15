@@ -31,6 +31,9 @@ BENCH_REPS="${BENCH_REPS:-1}"
 CONFIGS="${CONFIGS:-single dual}"                 # which card configurations to run; on Taichi Station "dual" only:
                                                   # single card leaves ~56 GB of weights on the CPU side of 30 GB RAM
 MIN_FREE_MB="${MIN_FREE_MB:-6000}"                # skip a step when MemAvailable is below this (protects the desktop)
+NO_HOST="${NO_HOST:-1}"                           # 1: --no-host, keep CPU-side layers mmapped instead of copied into pinned
+                                                  # host memory (with a GPU backend the host buffer type is used by default;
+                                                  # ~30 GB of weights then land in pinned RAM + GTT + zram and starve the desktop)
 TS="$(date +%Y%m%d-%H%M%S)"
 LOGS="$GPU_SWAP_DIR/test-logs-$TS"; mkdir -p "$LOGS"
 REPORT="$GPU_SWAP_DIR/test-results-$TS.md"
@@ -50,8 +53,9 @@ mem_guard() {  # mem_guard <label> -> 0 if enough RAM is available to start a st
 }
 in_configs() { case " $CONFIGS " in *" $1 "*) return 0;; *) return 1;; esac; }
 fit_args() {  # fit_args <single|dual> -> the offload/fit flags for llama-server / llama-mtmd-cli
-  if [ "$FIT" = on ]; then [ "$1" = dual ] && echo "-fit on -fitt $FIT_TARGET_DUAL" || echo "-fit on -fitt $FIT_TARGET_SINGLE"
-  else echo "-ngl 99 -fit off"; fi
+  local nh=""; [ "$NO_HOST" = 1 ] && nh=" --no-host"
+  if [ "$FIT" = on ]; then [ "$1" = dual ] && echo "-fit on -fitt $FIT_TARGET_DUAL$nh" || echo "-fit on -fitt $FIT_TARGET_SINGLE$nh"
+  else echo "-ngl 99 -fit off$nh"; fi
 }
 trap kill_server EXIT
 
@@ -92,7 +96,7 @@ open(sys.argv[1], "wb").write(png)
 PY
 
 bench_flags() {  # bench_flags <single|dual>; llama-bench (b7xxx+): -fa on|off, -lm mmap, -fitt <MiB,...>, -dev a/b
-  local f="-fa on -lm mmap -sm layer -p 512,$PROMPT_TOKENS -n 128 -r $BENCH_REPS"
+  local f="-fa on -lm mmap -sm layer -p 512,$PROMPT_TOKENS -n 128 -r $BENCH_REPS --no-host $NO_HOST"
   # llama-bench takes a single -fitt value (broadcast to every device): use the display card's margin
   if [ "$FIT" = on ]; then f="$f -fitt ${FIT_TARGET_SINGLE%%,*}"; else f="$f -ngl 99"; fi
   echo "$f"
@@ -100,7 +104,7 @@ bench_flags() {  # bench_flags <single|dual>; llama-bench (b7xxx+): -fa on|off, 
 server_bench() {  # server_bench <bin> <devices-arg> <label> <single|dual> [fit-override] -> "prompt_tps gen_tps ttft_s n_prompt assert"
   local bin="$1" dev="$2" label="$3" cfg="$4" fitov="${5:-}"
   local log="$LOGS/server-$label.log" fargs
-  fargs="$(fit_args "$cfg")"; [ "$fitov" = on ] && fargs="-fit on -fitt $([ "$cfg" = dual ] && echo "$FIT_TARGET_DUAL" || echo "$FIT_TARGET_SINGLE")"
+  fargs="$(fit_args "$cfg")"; [ "$fitov" = on ] && fargs="-fit on -fitt $([ "$cfg" = dual ] && echo "$FIT_TARGET_DUAL" || echo "$FIT_TARGET_SINGLE")$([ "$NO_HOST" = 1 ] && echo ' --no-host')"
   kill_server
   "$bin" -m "$MODEL" --mmproj "$MMPROJ" --jinja -fa on $fargs -c "$CTX" --host 127.0.0.1 --port "$PORT" $dev >"$log" 2>&1 &
   SRV_PID=$!
