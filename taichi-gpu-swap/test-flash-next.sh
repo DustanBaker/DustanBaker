@@ -12,7 +12,7 @@ set -uo pipefail
 GPU_SWAP_DIR="${GPU_SWAP_DIR:-$HOME/gpu-swap}"
 LLAMA_DIR="${LLAMA_DIR:-$GPU_SWAP_DIR/llama.cpp}"
 MODELS="${MODELS:-$HOME/models}"
-SUBDIR="${SUBDIR:-AD-4.27bpw-Q4_K_M-M64}"
+SUBDIR="${SUBDIR:-Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64}"
 MODEL="${MODEL:-$(ls "$MODELS/$SUBDIR"/*00001-of-*.gguf 2>/dev/null | head -n1)}"
 [ -n "$MODEL" ] || MODEL="$(ls "$MODELS/$SUBDIR"/*.gguf 2>/dev/null | head -n1)"
 MMPROJ="${MMPROJ:-$MODELS/mmproj-Qwen3.8-Flash-Next-F16.gguf}"

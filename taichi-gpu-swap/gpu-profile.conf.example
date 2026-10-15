@@ -12,4 +12,4 @@ DGPU_PCI_ADDR="0000:01:00.0"                                              # top 
 IGPU_PCI_ADDR="0000:10:00.0"                                              # Raphael iGPU, if enabled in BIOS
 LLAMA_UNIT="llama-server.service"        # optional: repoint ExecStart via a drop-in; empty = leave services alone
 LLAMA_UNIT_SCOPE="system"                # system | user
-LLAMA_EXEC_AMD="/home/dusty/gpu-swap/llama.cpp/build-vulkan/bin/llama-server --host 127.0.0.1 --port 8080 -m /home/dusty/models/AD-4.27bpw-Q4_K_M-M64/Qwen3.8-Flash-Next-Q4_K_M-00001-of-00010.gguf --mmproj /home/dusty/models/mmproj-Qwen3.8-Flash-Next-F16.gguf -ngl 99 --jinja -fa on -fit on -c 65536"
+LLAMA_EXEC_AMD="/home/dusty/gpu-swap/llama.cpp/build-vulkan/bin/llama-server --host 127.0.0.1 --port 8080 -m /home/dusty/models/Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64/Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64-00001-of-00033.gguf --mmproj /home/dusty/models/mmproj-Qwen3.8-Flash-Next-F16.gguf -ngl 99 --jinja -fa on -fit on -c 65536"

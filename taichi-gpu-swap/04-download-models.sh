@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Phase 4.1 — pre-stage the models into ~/models and verify SHA256 against Hugging Face's LFS metadata.
-#   AtomicChat/Qwen3.8-Flash-Next-GGUF : AD-4.27bpw-Q4_K_M-M64/* (all shards, ~93 GB) + mmproj-Qwen3.8-Flash-Next-F16.gguf
+#   AtomicChat/Qwen3.8-Flash-Next-GGUF : Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64/* (all shards, ~93 GB) + mmproj-Qwen3.8-Flash-Next-F16.gguf
 #   optional: WITH_27B=1 adds a Q4 GGUF of Qwen3.8-27B (set QWEN27B_REPO/QWEN27B_GLOB to the exact repo/file you want).
 # Resumable; re-run after an interruption. Needs ~100 GB free (checked first).
 set -uo pipefail
 MODELS="${MODELS:-$HOME/models}"; mkdir -p "$MODELS"
 REPO="${REPO:-AtomicChat/Qwen3.8-Flash-Next-GGUF}"
-SUBDIR="${SUBDIR:-AD-4.27bpw-Q4_K_M-M64}"
+SUBDIR="${SUBDIR:-Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64}"
 MMPROJ="${MMPROJ:-mmproj-Qwen3.8-Flash-Next-F16.gguf}"
 NEED_GB="${NEED_GB:-100}"
-export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
+# huggingface_hub >= 1.0 uses hf_xet for fast downloads; hf_transfer is gone, so do not force it on
+export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
 
 echo "==> free space on $MODELS"
 avail_gb=$(( $(df --output=avail -B1 "$MODELS" | tail -n1) / 1024 / 1024 / 1024 ))
@@ -21,7 +22,7 @@ HF=""
 for c in hf huggingface-cli; do command -v "$c" >/dev/null 2>&1 && { HF="$c"; break; }; done
 if [ -z "$HF" ]; then
   V="$HOME/gpu-swap/.venv-hf"
-  [ -x "$V/bin/hf" ] || { python3 -m venv "$V" && "$V/bin/pip" -q install -U "huggingface_hub[cli,hf_transfer]"; }
+  [ -x "$V/bin/hf" ] || { python3 -m venv "$V" && "$V/bin/pip" -q install -U "huggingface_hub"; }
   HF="$V/bin/hf"
 fi
 echo "==> using $HF ($($HF version 2>/dev/null | head -n1))"
@@ -56,7 +57,7 @@ SUMS="$MODELS/SHA256SUMS.$(basename "$SUBDIR")"
 
 # ---- download (resumable)
 echo "==> downloading $REPO/$SUBDIR/* and $MMPROJ -> $MODELS"
-"$HF" download "$REPO" --include "$SUBDIR/*" "$MMPROJ" --local-dir "$MODELS" 2>&1 | tail -n 5 || { echo "download failed; re-run to resume" >&2; exit 1; }
+"$HF" download "$REPO" --include "$SUBDIR/*" --include "$MMPROJ" --local-dir "$MODELS" 2>&1 | tail -n 5 || { echo "download failed; re-run to resume" >&2; exit 1; }
 
 # ---- verify
 echo "==> verifying SHA256 (this reads ~93 GB; takes a few minutes on NVMe)"

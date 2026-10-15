@@ -33,7 +33,7 @@ Run in this order, all while the NVIDIA desktop is working:
 | inventory | `~/gpu-swap/01-inventory.sh` | `~/gpu-swap/inventory-nvidia.md` |
 | touchpoints | `~/gpu-swap/02-find-touchpoints.sh` | `~/gpu-swap/nvidia-touchpoints.md`, `~/gpu-swap/gpu-profile.conf` |
 | AMD stack + builds | `~/gpu-swap/03-install-amd-stack.sh` | packages (nothing removed), `~/gpu-swap/llama.cpp/build-{vulkan,rocm}`, `~/gpu-swap/amd-stack.md` |
-| models | `~/gpu-swap/04-download-models.sh` | `~/models/AD-4.27bpw-Q4_K_M-M64/*`, `~/models/mmproj-Qwen3.8-Flash-Next-F16.gguf`, `SHA256SUMS.*` |
+| models | `~/gpu-swap/04-download-models.sh` | `~/models/Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64/*`, `~/models/mmproj-Qwen3.8-Flash-Next-F16.gguf`, `SHA256SUMS.*` |
 | prove the switch | `~/gpu-swap/verify-inverse.sh` | nothing (sandbox copy + two real `--dry-run`s) |
 
 Read `gpu-profile.conf` once after step 3: it is the exact list of what `gpu-profile` will remove for `amd`
