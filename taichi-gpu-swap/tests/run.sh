@@ -80,7 +80,7 @@ cursor {
 }
 F
   printf 'nvidia\nnvidia_uvm\n' > "$ROOT/etc/modules-load.d/nvidia.conf"
-  printf 'LLAMA_UNIT=llama-server.service\nLLAMA_UNIT_SCOPE=system\nLLAMA_EXEC_AMD="/home/dusty/gpu-swap/llama.cpp/build-vulkan/bin/llama-server --host 127.0.0.1 --port 8080 -m /home/dusty/models/x.gguf -ngl 99"\n' > "$ROOT/home/dusty/gpu-swap/gpu-profile.conf"
+  printf 'HYPR_ENV_FILE=/home/dusty/.config/hypr/envs.conf\nLLAMA_UNIT=llama-server.service\nLLAMA_UNIT_SCOPE=system\nLLAMA_EXEC_AMD="/home/dusty/gpu-swap/llama.cpp/build-vulkan/bin/llama-server --host 127.0.0.1 --port 8080 -m /home/dusty/models/x.gguf -ngl 99"\n' > "$ROOT/home/dusty/gpu-swap/gpu-profile.conf"
 }
 snap() { (cd "$ROOT" && find . -type f ! -path './root/*' ! -name gpu-profile.state | sort | while read -r f; do printf '== %s\n' "$f"; cat "$f"; done); }
 

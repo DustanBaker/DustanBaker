@@ -330,7 +330,7 @@ detect_toggle_files() {
       case " ${TOGGLE_FILES[*]:-} " in *" $f "*) ;; *) TOGGLE_FILES+=("$f") ;; esac
     fi
   done
-  [ -z "$HYPR_ENV_FILE" ] && HYPR_ENV_FILE="$HOME_DIR/.config/hypr/envs.conf"
+  : "${HYPR_ENV_FILE:=$HOME_DIR/.config/hypr/envs.conf}"
 }
 is_setting_line() {  # not blank, not a comment
   [[ "$1" =~ ^[[:space:]]*$ ]] && return 1
