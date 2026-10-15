@@ -28,6 +28,9 @@ FIT="${FIT:-on}"                                  # on: let llama.cpp pick -ngl/
 FIT_TARGET_SINGLE="${FIT_TARGET_SINGLE:-3072}"    # MiB of VRAM left free on the (display) card
 FIT_TARGET_DUAL="${FIT_TARGET_DUAL:-3072,2048}"   # per device, comma separated (device 0 = display card)
 BENCH_REPS="${BENCH_REPS:-1}"
+CONFIGS="${CONFIGS:-single dual}"                 # which card configurations to run; on Taichi Station "dual" only:
+                                                  # single card leaves ~56 GB of weights on the CPU side of 30 GB RAM
+MIN_FREE_MB="${MIN_FREE_MB:-6000}"                # skip a step when MemAvailable is below this (protects the desktop)
 TS="$(date +%Y%m%d-%H%M%S)"
 LOGS="$GPU_SWAP_DIR/test-logs-$TS"; mkdir -p "$LOGS"
 REPORT="$GPU_SWAP_DIR/test-results-$TS.md"
@@ -40,6 +43,12 @@ assert_check() {  # assert_check <logfile> -> "clean" or the offending line
   [ -z "$l" ] && echo "clean" || echo "FAIL: ${l:0:120}"
 }
 kill_server() { if [ -n "${SRV_PID:-}" ]; then kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; fi; SRV_PID=""; }
+mem_guard() {  # mem_guard <label> -> 0 if enough RAM is available to start a step, else logs and returns 1
+  local avail; avail=$(( $(awk '/^MemAvailable:/{print $2}' /proc/meminfo) / 1024 ))
+  [ "$avail" -ge "$MIN_FREE_MB" ] && return 0
+  echo "SKIPPED $1: only ${avail} MB of RAM available (< MIN_FREE_MB=$MIN_FREE_MB); not risking the desktop" | tee -a "$REPORT"; return 1
+}
+in_configs() { case " $CONFIGS " in *" $1 "*) return 0;; *) return 1;; esac; }
 fit_args() {  # fit_args <single|dual> -> the offload/fit flags for llama-server / llama-mtmd-cli
   if [ "$FIT" = on ]; then [ "$1" = dual ] && echo "-fit on -fitt $FIT_TARGET_DUAL" || echo "-fit on -fitt $FIT_TARGET_SINGLE"
   else echo "-ngl 99 -fit off"; fi
@@ -131,6 +140,8 @@ for be in $BACKENDS; do
   say ""; say "### llama-bench"; say ""; say '```'
   for cfg in "single:$B1" "dual:$B2"; do
     name="${cfg%%:*}"; dev="${cfg#*:}"
+    in_configs "$name" || { echo "--- $name: not in CONFIGS=\"$CONFIGS\", skipped" | tee -a "$REPORT"; continue; }
+    mem_guard "llama-bench $be $name" || continue
     echo "--- $name ($dev; $(bench_flags "$name"))" | tee -a "$REPORT"
     # shellcheck disable=SC2046
     "$BIN/llama-bench" -m "$MODEL" $(bench_flags "$name") $dev 2>"$LOGS/bench-$be-$name.err" | tee -a "$REPORT" | tail -n 6
@@ -141,10 +152,15 @@ for be in $BACKENDS; do
   say ""; say "### llama-server, ~${PROMPT_TOKENS}-token prompt, 64 generated tokens"; say ""
   row "config" "prompt tok/s" "gen tok/s" "TTFT (s)" "notes" "assert check"
   row "---" "---" "---" "---" "---" "---"
-  r1="$(server_bench "$BIN/llama-server" "$D1" "$be-single" single | tr '\n' ' ')"; set -- $r1; row "single card ($D1)" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-} ${5:-}" "${*:6}"
-  r2="$(server_bench "$BIN/llama-server" "$D2 -sm layer" "$be-dual" dual | tr '\n' ' ')"; set -- $r2; row "both cards, layer split" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-} ${5:-}" "${*:6}"
+  if in_configs single && mem_guard "llama-server $be single"; then
+    r1="$(server_bench "$BIN/llama-server" "$D1" "$be-single" single | tr '\n' ' ')"; set -- $r1; row "single card ($D1)" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-} ${5:-}" "${*:6}"
+  else row "single card ($D1)" "-" "-" "-" "skipped (CONFIGS=$CONFIGS / RAM guard)" "-"; fi
+  if in_configs dual && mem_guard "llama-server $be dual"; then
+    r2="$(server_bench "$BIN/llama-server" "$D2 -sm layer" "$be-dual" dual | tr '\n' ' ')"; set -- $r2; row "both cards, layer split" "${1:-?}" "${2:-?}" "${3:-?}" "${4:-} ${5:-}" "${*:6}"
+  else row "both cards, layer split" "-" "-" "-" "skipped (CONFIGS=$CONFIGS / RAM guard)" "-"; fi
   # ---- vision
   say ""; say "### vision (llama-mtmd-cli, both cards)"; say ""; say '```'
+  mem_guard "llama-mtmd-cli $be" && \
   timeout 1800 "$BIN/llama-mtmd-cli" -m "$MODEL" --mmproj "$MMPROJ" --image "$IMG" -p "What shapes and colours are in this image? Answer in one sentence." --jinja -fa on $(fit_args dual) $D2 -n 64 --temp 0 >"$LOGS/mtmd-$be.log" 2>&1
   tail -n 4 "$LOGS/mtmd-$be.log" | tee -a "$REPORT"
   echo "vision check: $(grep -qiE 'blue|circle|disc|red|square' "$LOGS/mtmd-$be.log" && echo 'answer mentions the shapes/colours: OK' || echo 'answer did not describe the image — check log') / $(assert_check "$LOGS/mtmd-$be.log")" | tee -a "$REPORT"
