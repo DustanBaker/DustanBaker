@@ -116,7 +116,7 @@ open(sys.argv[1], "wb").write(png)
 PY
 
 bench_flags() {  # bench_flags <single|dual>; llama-bench (b7xxx+): -fa on|off, -lm mmap, -fitt <MiB,...>, -dev a/b
-  local f="-fa on -lm mmap -sm layer -p 512,$PROMPT_TOKENS -n 128 -r $BENCH_REPS --no-host $NO_HOST"
+  local f="-fa on -lm ${LOAD_MODE:-mmap} -sm layer -p 512,$PROMPT_TOKENS -n 128 -r $BENCH_REPS --no-host $NO_HOST"
   # llama-bench takes a single -fitt value (broadcast to every device): use the display card's margin
   if [ "$FIT" = on ]; then f="$f -fitt ${FIT_TARGET_SINGLE%%,*}"; else f="$f -ngl 99"; fi
   echo "$f"
@@ -126,7 +126,7 @@ server_bench() {  # server_bench <bin> <devices-arg> <label> <single|dual> [fit-
   local log="$LOGS/server-$label.log" fargs
   fargs="$(fit_args "$cfg")"; [ "$fitov" = on ] && fargs="-fit on -fitt $([ "$cfg" = dual ] && echo "$FIT_TARGET_DUAL" || echo "$FIT_TARGET_SINGLE")$([ "$NO_HOST" = 1 ] && echo ' --no-host')"
   kill_server
-  "$bin" -m "$MODEL" --mmproj "$MMPROJ" --jinja -fa on $fargs -c "$CTX" --host 127.0.0.1 --port "$PORT" $dev >"$log" 2>&1 &
+  "$bin" -m "$MODEL" --mmproj "$MMPROJ" --jinja -fa on --load-mode "${LOAD_MODE:-mmap}" $fargs -c "$CTX" --host 127.0.0.1 --port "$PORT" $dev >"$log" 2>&1 &
   SRV_PID=$!
   for _ in $(seq 1 180); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 2; done
   if ! curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
@@ -157,6 +157,9 @@ for be in $BACKENDS; do
   BIN="$LLAMA_DIR/build-$be/bin"; [ -x "$BIN/llama-server" ] || { say ""; say "## $be: build missing at $BIN — skipped"; continue; }
   say ""; say "## backend: $be  (\`$BIN\`)"; say ""
   say '```'; "$BIN/llama-cli" --list-devices 2>&1 | tee -a "$REPORT"; say '```'
+  # ROCm: hipMemcpy from an mmapped file crawls at ~0.17 GB/s on this stack (page-by-page pinning through KFD), so a 29 GB
+  # model takes tens of minutes to load and looks "stuck" (VRAM is allocated before any tensor is copied). Load without mmap.
+  if [ "$be" = rocm ]; then LOAD_MODE=none; else LOAD_MODE=mmap; fi
   # device 0 is the card driving the desktop (top slot). llama-server/mtmd take a comma list, llama-bench a slash list.
   if [ "$be" = vulkan ]; then D1="--device Vulkan0"; D2="--device Vulkan0,Vulkan1"; B1="-dev Vulkan0"; B2="-dev Vulkan0/Vulkan1"
   else D1="--device ROCm0"; D2="--device ROCm0,ROCm1"; B1="-dev ROCm0"; B2="-dev ROCm0/ROCm1"; fi
@@ -185,7 +188,7 @@ for be in $BACKENDS; do
   # ---- vision
   say ""; say "### vision (llama-mtmd-cli, both cards)"; say ""; say '```'
   mem_guard "llama-mtmd-cli $be" && \
-  timeout 1800 "$BIN/llama-mtmd-cli" -m "$MODEL" --mmproj "$MMPROJ" --image "$IMG" -p "What shapes and colours are in this image? Answer in one sentence." --jinja -fa on $(fit_args dual) $D2 -n 64 --temp 0 >"$LOGS/mtmd-$be.log" 2>&1
+  timeout 1800 "$BIN/llama-mtmd-cli" -m "$MODEL" --mmproj "$MMPROJ" --image "$IMG" -p "What shapes and colours are in this image? Answer in one sentence." --jinja -fa on --load-mode "${LOAD_MODE:-mmap}" $(fit_args dual) $D2 -n 64 --temp 0 >"$LOGS/mtmd-$be.log" 2>&1
   tail -n 4 "$LOGS/mtmd-$be.log" | tee -a "$REPORT"
   echo "vision check: $(grep -qiE 'blue|circle|disc|red|square' "$LOGS/mtmd-$be.log" && echo 'answer mentions the shapes/colours: OK' || echo 'answer did not describe the image — check log') / $(assert_check "$LOGS/mtmd-$be.log")" | tee -a "$REPORT"
   say '```'
