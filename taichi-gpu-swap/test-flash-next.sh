@@ -31,6 +31,9 @@ BENCH_REPS="${BENCH_REPS:-1}"
 CONFIGS="${CONFIGS:-single dual}"                 # which card configurations to run; on Taichi Station "dual" only:
                                                   # single card leaves ~56 GB of weights on the CPU side of 30 GB RAM
 MIN_FREE_MB="${MIN_FREE_MB:-6000}"                # skip a step when MemAvailable is below this (protects the desktop)
+WATCHDOG_MIN_MB="${WATCHDOG_MIN_MB:-3000}"        # kill the running llama process when MemAvailable drops below this:
+                                                  # on 2026-10-15 an 88 GB load drove MemAvailable to 0 (GTT staging + zram)
+                                                  # and the kernel wedged in a memory deadlock
 NO_HOST="${NO_HOST:-1}"                           # 1: --no-host, keep CPU-side layers mmapped instead of copied into pinned
                                                   # host memory (with a GPU backend the host buffer type is used by default;
                                                   # ~30 GB of weights then land in pinned RAM + GTT + zram and starve the desktop)
@@ -57,7 +60,20 @@ fit_args() {  # fit_args <single|dual> -> the offload/fit flags for llama-server
   if [ "$FIT" = on ]; then [ "$1" = dual ] && echo "-fit on -fitt $FIT_TARGET_DUAL$nh" || echo "-fit on -fitt $FIT_TARGET_SINGLE$nh"
   else echo "-ngl 99 -fit off$nh"; fi
 }
-trap kill_server EXIT
+mem_watchdog() {  # runs for the whole test: kills every llama.cpp process from our builds when RAM gets critically low
+  local a
+  while true; do
+    a=$(( $(awk '/^MemAvailable:/{print $2}' /proc/meminfo) / 1024 ))
+    if [ "$a" -lt "$WATCHDOG_MIN_MB" ]; then
+      echo "WATCHDOG $(date +%T): MemAvailable ${a} MB < ${WATCHDOG_MIN_MB} MB — killing llama processes to protect the kernel/desktop" | tee -a "$REPORT" >&2
+      pkill -KILL -f "$LLAMA_DIR/build-" 2>/dev/null; sleep 5
+    fi
+    sleep 1
+  done
+}
+mem_watchdog & WD_PID=$!
+cleanup() { kill_server; kill "$WD_PID" 2>/dev/null; }
+trap cleanup EXIT
 
 # ---- environment report
 printf '# Qwen3.8-Flash-Next on 2x R9700 — first-boot test %s\n\n' "$TS" > "$REPORT"
