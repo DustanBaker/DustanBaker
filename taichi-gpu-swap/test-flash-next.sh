@@ -50,6 +50,9 @@ assert_check() {  # assert_check <logfile> -> "clean" or the offending line
 }
 kill_server() { if [ -n "${SRV_PID:-}" ]; then kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; fi; SRV_PID=""; }
 mem_guard() {  # mem_guard <label> -> 0 if enough RAM is available to start a step, else logs and returns 1
+  # amdgpu's TTM page pool keeps the GTT staging pages of every previous load (up to half of RAM) and only
+  # gives them back under pressure; shrink it first so each load starts with the RAM it needs.
+  if sudo -n true 2>/dev/null; then sync; echo 2 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true; sleep 2; fi
   local avail; avail=$(( $(awk '/^MemAvailable:/{print $2}' /proc/meminfo) / 1024 ))
   [ "$avail" -ge "$MIN_FREE_MB" ] && return 0
   echo "SKIPPED $1: only ${avail} MB of RAM available (< MIN_FREE_MB=$MIN_FREE_MB); not risking the desktop" | tee -a "$REPORT"; return 1
