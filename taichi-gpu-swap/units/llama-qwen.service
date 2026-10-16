@@ -1,0 +1,30 @@
+# ~/.config/systemd/user/llama-qwen.service — Qwen3.8-27B Q8_0 on both Radeon AI PRO R9700s, llama.cpp Vulkan build.
+# Verified 2026-10-15: weights + KV cache fully in VRAM (20.1 + 18.4 GB at 131072 ctx; 24.7 + 23.0 GB at 262144).
+# Install: cp units/llama-qwen.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user disable --now ollama && systemctl --user enable --now llama-qwen
+[Unit]
+Description=llama-server: Qwen3.8-27B Q8_0 (Vulkan, 2x R9700, VRAM-only)
+After=graphical-session.target
+# ollama would load a second copy of the model into VRAM on the first request; keep it stopped while this runs.
+Conflicts=ollama.service
+
+[Service]
+Type=simple
+Environment=LLAMA_PORT=11434
+Environment=LLAMA_CTX=131072
+ExecStart=%h/gpu-swap/llama.cpp/build-vulkan/bin/llama-server \
+  -m %h/models/qwen3.8-27b/Qwen3.8-27B-Q8_0.gguf \
+  --mmproj %h/models/qwen3.8-27b/mmproj-F16.gguf \
+  --alias qwen3.8:27b \
+  -ngl 99 -fit off --no-host -fa on --jinja \
+  -c ${LLAMA_CTX} -np 4 --kv-unified \
+  --device Vulkan0,Vulkan1 -sm layer \
+  --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0 \
+  --host 127.0.0.1 --port ${LLAMA_PORT} --metrics
+Restart=on-failure
+RestartSec=10
+# A stuck load must never take the box down: cap RAM, VRAM is the real home of the model.
+MemoryMax=16G
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target
