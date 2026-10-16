@@ -1,0 +1,5 @@
+# /etc/udev/rules.d/80-amdgpu-no-runtime-pm.rules — keep the Radeon AI PRO R9700s (1002:7551) out of runtime suspend.
+# amdgpu evicts a card's whole VRAM into system RAM when the card runtime-suspends; a headless compute card that
+# serves an LLM idles between requests, suspends, and dumps ~18 GB into a 30 GB box (seen 2026-10-15: 42 suspends
+# in one boot, 14 GB of GTT, desktop session crash). Apply now: echo on | sudo tee /sys/bus/pci/devices/0000:4e:00.0/power/control
+ACTION=="add|change", SUBSYSTEM=="pci", ATTR{vendor}=="0x1002", ATTR{device}=="0x7551", ATTR{power/control}="on"
