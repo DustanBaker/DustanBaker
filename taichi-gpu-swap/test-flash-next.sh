@@ -76,7 +76,8 @@ cleanup() { kill_server; kill "$WD_PID" 2>/dev/null; }
 trap cleanup EXIT
 
 # ---- environment report
-printf '# Qwen3.8-Flash-Next on 2x R9700 — first-boot test %s\n\n' "$TS" > "$REPORT"
+MODEL_NAME="${MODEL_NAME:-$(basename "$MODEL" .gguf)}"
+printf '# %s on 2x R9700 — llama.cpp test %s\n\n' "$MODEL_NAME" "$TS" > "$REPORT"
 say "model: \`$MODEL\`"; say "mmproj: \`$MMPROJ\`"; say "llama.cpp: \`$(cat "$GPU_SWAP_DIR/llama.cpp-commit.txt" 2>/dev/null || git -C "$LLAMA_DIR" rev-parse HEAD)\`"
 say ""; say '```'
 { uname -r; lspci -nn -d ::0300; ls -l /dev/dri/by-path/ 2>/dev/null; vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' ; rocminfo 2>/dev/null | grep -E '^\s+Name:\s+gfx' ; } | tee -a "$REPORT"
